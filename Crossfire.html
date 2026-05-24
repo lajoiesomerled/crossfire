@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Crossfile · Random Walk Enemies · Road Combat</title>
+    <style>
+        * {
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            background: #0a0f1a;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', 'VT323', monospace;
+            margin: 0;
+            padding: 20px;
+            overflow: hidden;
+        }
+        .game-container {
+            background: #11161f;
+            border-radius: 36px;
+            padding: 20px 24px 24px 24px;
+            box-shadow: 0 20px 35px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.08);
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            box-shadow: 0 0 0 3px #2e3f44, 0 12px 28px black;
+            border-radius: 16px;
+            cursor: none;
+        }
+        .info-panel {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-top: 18px;
+            gap: 20px;
+            flex-wrap: wrap;
+            background: #0b0f18cc;
+            backdrop-filter: blur(5px);
+            padding: 8px 20px;
+            border-radius: 60px;
+            border: 1px solid #3a4a5f;
+        }
+        .stats {
+            display: flex;
+            gap: 24px;
+            font-weight: bold;
+            text-shadow: 0 2px 2px black;
+        }
+        .stat {
+            background: #020408aa;
+            padding: 4px 16px;
+            border-radius: 32px;
+            color: #f0ebd8;
+            letter-spacing: 1px;
+            font-size: 1.3rem;
+            font-weight: bold;
+        }
+        .stat span {
+            color: #f7c873;
+            font-size: 1.5rem;
+            margin-right: 8px;
+        }
+        .controls {
+            display: flex;
+            gap: 16px;
+            color: #b7c7dd;
+            font-size: 0.72rem;
+            background: #00000088;
+            padding: 4px 14px;
+            border-radius: 40px;
+            font-family: monospace;
+        }
+        .controls kbd {
+            background: #262c38;
+            padding: 2px 7px;
+            border-radius: 8px;
+            font-weight: bold;
+            color: #ffe0a3;
+            margin: 0 2px;
+        }
+        button {
+            background: #2d4248;
+            border: none;
+            font-family: monospace;
+            font-weight: bold;
+            padding: 5px 18px;
+            border-radius: 60px;
+            color: #f2efcf;
+            cursor: pointer;
+            transition: 0.08s linear;
+            font-size: 0.9rem;
+        }
+        button:hover {
+            background: #4c717a;
+            transform: scale(0.96);
+            box-shadow: 0 0 8px cyan;
+        }
+    </style>
+</head>
+<body>
+<div>
+    <div class="game-container">
+        <canvas id="gameCanvas" width="736" height="736"></canvas>
+        <div class="info-panel">
+            <div class="stats">
+                <div class="stat"><span>❤️</span> <span id="livesDisplay">3</span></div>
+                <div class="stat"><span>⭐</span> <span id="scoreDisplay">0</span></div>
+                <div class="stat"><span>👾</span> <span id="enemiesLeft">0</span></div>
+                <div class="stat"><span>📶</span> <span id="levelDisplay">1</span></div>
+            </div>
+            <div class="controls">
+                <span>🡄🡅🡆🡇  <kbd>I J K L</kbd> smooth move</span>
+                <span>🔫 <kbd>W A S D</kbd> shoot (dot)</span>
+            </div>
+            <button id="resetBtn">⚡ RESTART</button>
+        </div>
+        <div style="font-size: 12px; text-align: center; margin-top: 12px; color:#97a9c2;">⚡ Enemies wander randomly · Avoid bullets · Push each other apart ⚡</div>
+    </div>
+</div>
+
+<script>
+    (function(){
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // ----- SOUND ENGINE (Web Audio API) -----
+        let audioCtx = null;
+        function ensureAudio() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+        function playShoot() {
+            ensureAudio();
+            let t = audioCtx.currentTime;
+            let osc = audioCtx.createOscillator();
+            let gain = audioCtx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(800, t);
+            osc.frequency.exponentialRampToValueAtTime(200, t + 0.08);
+            gain.gain.setValueAtTime(0.12, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+            osc.connect(gain).connect(audioCtx.destination);
+            osc.start(t);
+            osc.stop(t + 0.1);
+        }
+        function playHit() {
+            ensureAudio();
+            let t = audioCtx.currentTime;
+            let osc = audioCtx.createOscillator();
+            let gain = audioCtx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(150, t);
+            osc.frequency.exponentialRampToValueAtTime(50, t + 0.15);
+            gain.gain.setValueAtTime(0.18, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+            osc.connect(gain).connect(audioCtx.destination);
+            osc.start(t);
+            osc.stop(t + 0.18);
+        }
+        function playBonus() {
+            ensureAudio();
+            let t = audioCtx.currentTime;
+            [440, 660, 880].forEach((freq, i) => {
+                let osc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, t + i * 0.07);
+                gain.gain.setValueAtTime(0.13, t + i * 0.07);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.07 + 0.14);
+                osc.connect(gain).connect(audioCtx.destination);
+                osc.start(t + i * 0.07);
+                osc.stop(t + i * 0.07 + 0.14);
+            });
+        }
+
+        // ----- WORLD CONSTANTS -----
+        const NODE_SIZE = 70;          // pixels between intersections
+        const ROAD_WIDTH = 18;
+        const SQUARE_SIZE = NODE_SIZE - ROAD_WIDTH;
+        const OFFSET = ROAD_WIDTH / 2;
+        const WORLD_MIN = 0;
+        const WORLD_MAX = NODE_SIZE * 10;  // 700px
+        
+        // ----- GAME STATE -----
+        let gameActive = true;
+        let victoryFlag = false;
+        
+        // ----- FIGHTER (smooth, faster than enemies) -----
+        let fighter = {
+            x: 350, y: 700,        // bottom-center (5,10)
+            radius: 15,
+            speed: 245,            // pixels/sec (faster than enemies)
+            invincibleTimer: 0,
+        };
+        let lives = 3;
+        let score = 0;
+        let shootCooldown = 0;
+        
+        // ----- LEVELS & ENEMIES -----
+        let currentLevel = 1;
+        const MAX_LEVEL = 10;
+        function enemiesThisLevel() { return 40 + currentLevel * 10; }  // 50 → 140
+
+        let enemies = [];
+        let enemiesSpawned = 0;
+        let enemySpawnTimer = 0;
+        
+        const ENEMY_TYPES = [
+            { name: "grunt", score: 100, color: "#e3a56d", size: 14, speed: 22, shootDelay: 1.3 },
+            { name: "ranger", score: 200, color: "#cf5c7c", size: 15, speed: 19, shootDelay: 1.1 },
+            { name: "commander", score: 350, color: "#aa6ac9", size: 17, speed: 26, shootDelay: 1.4 }
+        ];
+        
+        // ----- BULLETS (just a dot) -----
+        let bullets = [];
+        const BULLET_SPEED = 490;    // pixels/sec
+        const BULLET_RADIUS = 3;     // dot size
+        
+        // ----- BONUS -----
+        let bonus = { active: false, x: 0, y: 0, timer: 0, radius: 14 };
+        let bonusCooldown = 0;
+        
+        // ----- INPUT (movement + shooting) -----
+        let moveInput = { up: false, down: false, left: false, right: false };
+        let shootRequest = { up: false, down: false, left: false, right: false };
+        
+        // ---------- UTILITIES: ROAD CONSTRAINT (keep on grid lines) ----------
+        function applyRoadConstraint(pos, deltaX, deltaY) {
+            let newX = pos.x + deltaX;
+            let newY = pos.y + deltaY;
+            newX = Math.min(WORLD_MAX, Math.max(WORLD_MIN, newX));
+            newY = Math.min(WORLD_MAX, Math.max(WORLD_MIN, newY));
+            
+            let nearNodeX = Math.round(newX / NODE_SIZE) * NODE_SIZE;
+            let nearNodeY = Math.round(newY / NODE_SIZE) * NODE_SIZE;
+            let tolerance = 7;
+            let onIntersection = (Math.abs(newX - nearNodeX) < tolerance && Math.abs(newY - nearNodeY) < tolerance);
+            
+            if (onIntersection) return { x: newX, y: newY };
+            
+            let onHorizontal = Math.abs(newY - Math.round(newY / NODE_SIZE) * NODE_SIZE) < 6;
+            let onVertical = Math.abs(newX - Math.round(newX / NODE_SIZE) * NODE_SIZE) < 6;
+            
+            if (!onHorizontal && !onVertical) {
+                let distHor = Math.abs(newY - Math.round(newY / NODE_SIZE) * NODE_SIZE);
+                let distVer = Math.abs(newX - Math.round(newX / NODE_SIZE) * NODE_SIZE);
+                if (distHor < distVer) newY = Math.round(newY / NODE_SIZE) * NODE_SIZE;
+                else newX = Math.round(newX / NODE_SIZE) * NODE_SIZE;
+            } else if (onHorizontal && !onVertical) {
+                newY = Math.round(newY / NODE_SIZE) * NODE_SIZE;
+            } else if (!onHorizontal && onVertical) {
+                newX = Math.round(newX / NODE_SIZE) * NODE_SIZE;
+            }
+            newX = Math.min(WORLD_MAX, Math.max(WORLD_MIN, newX));
+            newY = Math.min(WORLD_MAX, Math.max(WORLD_MIN, newY));
+            return { x: newX, y: newY };
+        }
+        
+        // ----- FIGHTER MOVEMENT (smooth, road-aware) -----
+        function updateFighter(deltaSec) {
+            if (!gameActive) return;
+            let moveX = 0, moveY = 0;
+            if (moveInput.up) moveY -= 1;
+            if (moveInput.down) moveY += 1;
+            if (moveInput.left) moveX -= 1;
+            if (moveInput.right) moveX += 1;
+
+            let step = fighter.speed * deltaSec;
+
+            if (moveX !== 0 || moveY !== 0) {
+                let len = Math.hypot(moveX, moveY);
+                let intentX = moveX / len;
+                let intentY = moveY / len;
+
+                let onHoriz = Math.abs(fighter.y - Math.round(fighter.y / NODE_SIZE) * NODE_SIZE) < 6;
+                let onVert  = Math.abs(fighter.x - Math.round(fighter.x / NODE_SIZE) * NODE_SIZE) < 6;
+                let atInter = onHoriz && onVert;
+
+                if (!atInter && onHoriz && (moveInput.up || moveInput.down)) {
+                    // On horizontal road, turning vertical: slide to intersection first
+                    let targetX = Math.round(fighter.x / NODE_SIZE) * NODE_SIZE;
+                    let toInter = targetX - fighter.x;
+                    let absToInter = Math.abs(toInter);
+                    if (absToInter <= step) {
+                        fighter.x = targetX;
+                        let remaining = step - absToInter;
+                        let newPos = applyRoadConstraint({x: targetX, y: fighter.y}, 0, intentY * remaining);
+                        fighter.x = newPos.x;
+                        fighter.y = newPos.y;
+                    } else {
+                        fighter.x += Math.sign(toInter) * step;
+                    }
+                } else if (!atInter && onVert && (moveInput.left || moveInput.right)) {
+                    // On vertical road, turning horizontal: slide to intersection first
+                    let targetY = Math.round(fighter.y / NODE_SIZE) * NODE_SIZE;
+                    let toInter = targetY - fighter.y;
+                    let absToInter = Math.abs(toInter);
+                    if (absToInter <= step) {
+                        fighter.y = targetY;
+                        let remaining = step - absToInter;
+                        let newPos = applyRoadConstraint({x: fighter.x, y: targetY}, intentX * remaining, 0);
+                        fighter.x = newPos.x;
+                        fighter.y = newPos.y;
+                    } else {
+                        fighter.y += Math.sign(toInter) * step;
+                    }
+                } else {
+                    // Continue along current road
+                    let newPos = applyRoadConstraint(fighter, intentX * step, intentY * step);
+                    fighter.x = newPos.x;
+                    fighter.y = newPos.y;
+                }
+            } else {
+                // Idle: smoothly drift toward nearest intersection along the road
+                let targetX = Math.round(fighter.x / NODE_SIZE) * NODE_SIZE;
+                let targetY = Math.round(fighter.y / NODE_SIZE) * NODE_SIZE;
+                let dx = targetX - fighter.x;
+                let dy = targetY - fighter.y;
+                let dist = Math.hypot(dx, dy);
+                if (dist > 0.3) {
+                    let drift = Math.min(dist, fighter.speed * 0.85 * deltaSec);
+                    fighter.x += (dx / dist) * drift;
+                    fighter.y += (dy / dist) * drift;
+                } else {
+                    fighter.x = targetX;
+                    fighter.y = targetY;
+                }
+            }
+        }
+        
+        // ----- FIGHTER SHOOT (dot bullet, cardinal) -----
+        function fighterShoot() {
+            if (!gameActive) return;
+            if (shootCooldown > 0) return;
+            let dir = null;
+            if (shootRequest.up) dir = { x: 0, y: -1 };
+            else if (shootRequest.down) dir = { x: 0, y: 1 };
+            else if (shootRequest.left) dir = { x: -1, y: 0 };
+            else if (shootRequest.right) dir = { x: 1, y: 0 };
+            if (dir) {
+                bullets.push({
+                    x: fighter.x, y: fighter.y,
+                    vx: dir.x * BULLET_SPEED, vy: dir.y * BULLET_SPEED,
+                    owner: 'player',
+                    life: 2.2
+                });
+                playShoot();
+                shootCooldown = 0.24;
+            }
+            // reset request after shot handling
+            shootRequest = { up: false, down: false, left: false, right: false };
+        }
+        
+        // ----- ENEMY AI: RANDOM WALK on roads (with occasional direction changes) -----
+        // Each enemy has moveDirX, moveDirY (one of cardinal directions) and a timer to pick new random direction.
+        // Also when reaching an intersection, they may optionally change direction to avoid being stuck.
+        function getNearestNode(pos) {
+            let ix = Math.round(pos.x / NODE_SIZE);
+            let iy = Math.round(pos.y / NODE_SIZE);
+            ix = Math.min(10, Math.max(0, ix));
+            iy = Math.min(10, Math.max(0, iy));
+            return { ix, iy, x: ix * NODE_SIZE, y: iy * NODE_SIZE };
+        }
+        
+        // All four cardinal directions (dx, dy)
+        const CARDINAL_DIRS = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+
+        // Pick a cardinal direction biased roughly toward the fighter
+        function biasedTowardFighter(enemy) {
+            let toX = fighter.x - enemy.x;
+            let toY = fighter.y - enemy.y;
+            // Fewer enemies → less jitter → more accurate chasing
+            let remainingFrac = enemies.length / enemiesThisLevel();
+            let jitterRange = 140 * (0.2 + 0.8 * remainingFrac); // 140→28 as enemies die
+
+            let scores = CARDINAL_DIRS.map(d => {
+                let dot = d[0] * toX + d[1] * toY;
+                let jitter = (Math.random() - 0.5) * jitterRange;
+                return dot + jitter;
+            });
+
+            let bestIdx = 0;
+            for (let i = 1; i < scores.length; i++) {
+                if (scores[i] > scores[bestIdx]) bestIdx = i;
+            }
+            return CARDINAL_DIRS[bestIdx];
+        }
+
+        // Move enemy smoothly in its current direction, staying on roads
+        function moveEnemyRandom(enemy, deltaSec) {
+            if (!enemy.moveDir) {
+                enemy.moveDir = biasedTowardFighter(enemy);
+                enemy.pendingDir = null;
+                enemy.dirChangeTimer = 0.6 + Math.random() * 0.8;
+            }
+
+            let remainingFrac = enemies.length / enemiesThisLevel();
+            let speedMul = 1 + (1 - remainingFrac) * 0.5;  // 1x → 1.5x as enemies die
+            let step = enemy.speed * speedMul * deltaSec;
+
+            // Decide new direction when timer fires (store as pending, don't snap)
+            enemy.dirChangeTimer -= deltaSec;
+            if (enemy.dirChangeTimer <= 0 && !enemy.pendingDir) {
+                let newDir = biasedTowardFighter(enemy);
+                if (newDir[0] === -enemy.moveDir[0] && newDir[1] === -enemy.moveDir[1] && Math.random() < 0.5) {
+                    newDir = biasedTowardFighter(enemy);
+                }
+                enemy.dirChangeTimer = 0.9 + Math.random() * 1.1;
+                // Only queue a turn if the direction actually changes
+                if (newDir[0] !== enemy.moveDir[0] || newDir[1] !== enemy.moveDir[1]) {
+                    enemy.pendingDir = newDir;
+                }
+            }
+
+            // Boundary escape: force a pending turn toward interior
+            let node = getNearestNode(enemy);
+            let atBoundary = (node.ix === 0 || node.ix === 10 || node.iy === 0 || node.iy === 10);
+            if (atBoundary && Math.random() < 0.02 && !enemy.pendingDir) {
+                enemy.pendingDir = biasedTowardFighter(enemy);
+            }
+
+            if (enemy.pendingDir) {
+                // Smooth turn: slide to nearest intersection along current road, then commit
+                let onHoriz = Math.abs(enemy.y - Math.round(enemy.y / NODE_SIZE) * NODE_SIZE) < 6;
+                let onVert  = Math.abs(enemy.x - Math.round(enemy.x / NODE_SIZE) * NODE_SIZE) < 6;
+                let atInter = onHoriz && onVert;
+
+                if (atInter) {
+                    // At intersection: commit the pending turn and move in new direction
+                    enemy.moveDir = enemy.pendingDir;
+                    enemy.pendingDir = null;
+                    let newPos = applyRoadConstraint(enemy, enemy.moveDir[0] * step, enemy.moveDir[1] * step);
+                    enemy.x = newPos.x;
+                    enemy.y = newPos.y;
+                } else {
+                    // Slide toward nearest intersection along current road
+                    let targetX = enemy.x, targetY = enemy.y;
+                    if (onHoriz) {
+                        targetX = Math.round(enemy.x / NODE_SIZE) * NODE_SIZE;
+                    } else {
+                        targetY = Math.round(enemy.y / NODE_SIZE) * NODE_SIZE;
+                    }
+                    let toX = targetX - enemy.x;
+                    let toY = targetY - enemy.y;
+                    let dist = Math.hypot(toX, toY);
+                    if (dist <= step) {
+                        enemy.x = targetX;
+                        enemy.y = targetY;
+                    } else {
+                        enemy.x += (toX / dist) * step;
+                        enemy.y += (toY / dist) * step;
+                    }
+                }
+            } else {
+                // Normal movement along current direction
+                let newPos = applyRoadConstraint(enemy, enemy.moveDir[0] * step, enemy.moveDir[1] * step);
+                enemy.x = newPos.x;
+                enemy.y = newPos.y;
+            }
+        }
+        
+        // ----- ENEMY COLLISION AVOIDANCE (push apart when too close) -----
+        function handleEnemyCollisions() {
+            for (let i = 0; i < enemies.length; i++) {
+                for (let j = i+1; j < enemies.length; j++) {
+                    let a = enemies[i];
+                    let b = enemies[j];
+                    let dx = a.x - b.x;
+                    let dy = a.y - b.y;
+                    let dist = Math.hypot(dx, dy);
+                    let minDist = a.size + b.size;
+                    if (dist < minDist && dist > 0.01) {
+                        let overlap = minDist - dist;
+                        let angle = Math.atan2(dy, dx);
+                        let pushX = Math.cos(angle) * overlap * 0.55;
+                        let pushY = Math.sin(angle) * overlap * 0.55;
+                        a.x += pushX;
+                        a.y += pushY;
+                        b.x -= pushX;
+                        b.y -= pushY;
+                        // re-apply road constraint for both
+                        let ca = applyRoadConstraint(a, 0, 0);
+                        let cb = applyRoadConstraint(b, 0, 0);
+                        a.x = ca.x; a.y = ca.y;
+                        b.x = cb.x; b.y = cb.y;
+                        // slight direction nudge to prevent sticking
+                        if (Math.random() < 0.2) {
+                            a.dirChangeTimer = 0.2;
+                            b.dirChangeTimer = 0.2;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // ----- ENEMY SHOOTING (cardinal dot bullets aimed at fighter) -----
+        function enemyShoot(enemy) {
+            if (!gameActive) return;
+            let dx = fighter.x - enemy.x;
+            let dy = fighter.y - enemy.y;
+            if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return; // no point blank
+            let dir = { x: 0, y: 0 };
+            if (Math.abs(dx) > Math.abs(dy)) {
+                dir.x = dx > 0 ? 1 : -1;
+            } else {
+                dir.y = dy > 0 ? 1 : -1;
+            }
+            bullets.push({
+                x: enemy.x, y: enemy.y,
+                vx: dir.x * BULLET_SPEED, vy: dir.y * BULLET_SPEED,
+                owner: 'enemy',
+                life: 2.5
+            });
+        }
+        
+        // ----- SPAWN ENEMY (top road, with random initial direction)-----
+        function spawnEnemy() {
+            if (enemiesSpawned >= enemiesThisLevel()) return;
+            let typeIdx = Math.floor(Math.random() * ENEMY_TYPES.length);
+            let type = ENEMY_TYPES[typeIdx];
+            let xPos = (Math.floor(Math.random() * 11)) * NODE_SIZE;
+            let initialDir = biasedTowardFighter({x: xPos, y: 0});
+            enemies.push({
+                x: xPos, y: 0,
+                radius: type.size,
+                scoreVal: type.score,
+                color: type.color,
+                speed: type.speed,
+                shootTimer: 0,
+                shootDelay: type.shootDelay,
+                size: type.size,
+                moveDir: initialDir,
+                pendingDir: null,
+                dirChangeTimer: 0.6 + Math.random() * 0.9
+            });
+            enemiesSpawned++;
+        }
+        
+        // ----- BONUS LOGIC -----
+        function trySpawnBonus() {
+            if (bonus.active) return;
+            if (bonusCooldown > 0) return;
+            let randNode = Math.floor(Math.random() * 121);
+            let ix = randNode % 11;
+            let iy = Math.floor(randNode / 11);
+            bonus.active = true;
+            bonus.x = ix * NODE_SIZE;
+            bonus.y = iy * NODE_SIZE;
+            bonus.timer = 5.0;
+        }
+        
+        function collectBonus() {
+            if (!bonus.active) return false;
+            let dx = fighter.x - bonus.x;
+            let dy = fighter.y - bonus.y;
+            if (Math.hypot(dx, dy) < fighter.radius + bonus.radius) {
+                score += 500;
+                playBonus();
+                bonus.active = false;
+                bonusCooldown = 3.5;
+                updateUI();
+                return true;
+            }
+            return false;
+        }
+        
+        // ----- DAMAGE & COLLISIONS (fighter vs enemies, bullets) -----
+        function checkCollisions() {
+            // enemy vs fighter contact: mutual destruction — game over
+            for (let i=enemies.length-1; i>=0; i--) {
+                let e = enemies[i];
+                let dx = fighter.x - e.x;
+                let dy = fighter.y - e.y;
+                if (Math.hypot(dx, dy) < fighter.radius + e.radius) {
+                    if (gameActive) {
+                        lives = 0;
+                        score += e.scoreVal;
+                        enemies.splice(i, 1);
+                        updateUI();
+                        gameActive = false;
+                        victoryFlag = false;
+                        playHit();
+                    }
+                }
+            }
+            
+            // bullets: player bullets kill enemies; enemy bullets hurt fighter (no friendly fire)
+            for (let i=0; i<bullets.length; i++) {
+                let b = bullets[i];
+                if (b.owner === 'player') {
+                    for (let ei=0; ei<enemies.length; ei++) {
+                        let e = enemies[ei];
+                        let dx = b.x - e.x, dy = b.y - e.y;
+                        if (Math.hypot(dx, dy) < BULLET_RADIUS + e.radius) {
+                            score += e.scoreVal;
+                            enemies.splice(ei,1);
+                            bullets.splice(i,1);
+                            updateUI();
+                            i--;
+                            break;
+                        }
+                    }
+                } 
+                else if (b.owner === 'enemy') {
+                    let dx = b.x - fighter.x, dy = b.y - fighter.y;
+                    if (Math.hypot(dx, dy) < BULLET_RADIUS + fighter.radius) {
+                        if (fighter.invincibleTimer <= 0 && gameActive) {
+                            lives--;
+                            updateUI();
+                            if (lives <= 0) {
+                                gameActive = false;
+                                victoryFlag = false;
+                            }
+                            fighter.invincibleTimer = 0.85;
+                            playHit();
+                        }
+                        bullets.splice(i,1);
+                        i--;
+                    }
+                }
+            }
+        }
+        
+        // ----- UPDATE TIMERS, ENEMY AI, BULLETS, SPAWNING -----
+        function updateGame(deltaSec) {
+            if (!gameActive) return;
+            
+            // cooldowns
+            if (shootCooldown > 0) shootCooldown -= deltaSec;
+            if (fighter.invincibleTimer > 0) fighter.invincibleTimer -= deltaSec;
+            if (bonusCooldown > 0) bonusCooldown -= deltaSec;
+            
+            // enemy shooting & random movement
+            for (let e of enemies) {
+                if (e.shootTimer <= 0) {
+                    enemyShoot(e);
+                    e.shootTimer = e.shootDelay;
+                } else {
+                    e.shootTimer -= deltaSec;
+                }
+                moveEnemyRandom(e, deltaSec);
+            }
+            // enemy vs enemy separation
+            handleEnemyCollisions();
+            
+            // update bullets (dot movement)
+            for (let i=0; i<bullets.length; i++) {
+                let b = bullets[i];
+                b.x += b.vx * deltaSec;
+                b.y += b.vy * deltaSec;
+                b.life -= deltaSec;
+                if (b.x < -80 || b.x > WORLD_MAX+80 || b.y < -80 || b.y > WORLD_MAX+80 || b.life <= 0) {
+                    bullets.splice(i,1);
+                    i--;
+                }
+            }
+            
+            // enemy spawning (gradual)
+            if (enemiesSpawned < enemiesThisLevel()) {
+                if (enemySpawnTimer <= 0) {
+                    spawnEnemy();
+                    enemySpawnTimer = 0.9 + Math.random() * 0.8;
+                } else {
+                    enemySpawnTimer -= deltaSec;
+                }
+            }
+            
+            // bonus spawn & collection
+            trySpawnBonus();
+            if (bonus.active) {
+                bonus.timer -= deltaSec;
+                if (bonus.timer <= 0) {
+                    bonus.active = false;
+                    bonusCooldown = 2.5;
+                }
+                collectBonus();
+            }
+            
+            // collisions (damage)
+            checkCollisions();
+            
+            // victory / level-up condition
+            if (enemies.length === 0 && enemiesSpawned >= enemiesThisLevel() && gameActive) {
+                if (currentLevel < MAX_LEVEL) {
+                    // Advance to next level
+                    currentLevel++;
+                    startLevel();
+                } else {
+                    // Beat the final level
+                    gameActive = false;
+                    victoryFlag = true;
+                }
+            }
+            if (lives <= 0) {
+                gameActive = false;
+                victoryFlag = false;
+            }
+            updateUI();
+        }
+        
+        function updateUI() {
+            document.getElementById('livesDisplay').innerText = lives;
+            document.getElementById('scoreDisplay').innerText = score;
+            document.getElementById('enemiesLeft').innerText = enemies.length;
+            document.getElementById('levelDisplay').innerText = currentLevel;
+        }
+        
+        // ---------- DRAW EVERYTHING ----------
+        function drawRoadsAndSquares() {
+            for (let i = 0; i <= 10; i++) {
+                ctx.beginPath();
+                ctx.lineWidth = ROAD_WIDTH;
+                ctx.strokeStyle = "#2c3547";
+                ctx.moveTo(i*NODE_SIZE, 0);
+                ctx.lineTo(i*NODE_SIZE, WORLD_MAX);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(0, i*NODE_SIZE);
+                ctx.lineTo(WORLD_MAX, i*NODE_SIZE);
+                ctx.stroke();
+            }
+            for (let i=0;i<=10;i++){
+                for(let j=0;j<=10;j++){
+                    ctx.beginPath();
+                    ctx.arc(i*NODE_SIZE, j*NODE_SIZE, 5, 0, Math.PI*2);
+                    ctx.fillStyle = "#5b6e8c";
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(i*NODE_SIZE, j*NODE_SIZE, 2.5, 0, Math.PI*2);
+                    ctx.fillStyle = "#ccddee";
+                    ctx.fill();
+                }
+            }
+            for (let row = 0; row < 10; row++) {
+                for (let col = 0; col < 10; col++) {
+                    let x = col * NODE_SIZE + OFFSET;
+                    let y = row * NODE_SIZE + OFFSET;
+                    ctx.fillStyle = "#2f3e42";
+                    ctx.fillRect(x, y, SQUARE_SIZE, SQUARE_SIZE);
+                    ctx.fillStyle = "#1f2c2e";
+                    ctx.fillRect(x+2, y+2, SQUARE_SIZE-4, SQUARE_SIZE-4);
+                    ctx.fillStyle = "#4a6068";
+                    ctx.fillRect(x+1, y+1, SQUARE_SIZE-2, SQUARE_SIZE-2);
+                }
+            }
+        }
+        
+        function drawFighter() {
+            let inv = fighter.invincibleTimer > 0 && (Date.now() / 70 % 2 < 1);
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = "#ffaa44";
+            ctx.beginPath();
+            ctx.arc(fighter.x, fighter.y, fighter.radius, 0, Math.PI*2);
+            ctx.fillStyle = inv ? "#f8e0b0" : "#ffcf40";
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(fighter.x, fighter.y, fighter.radius-4, 0, Math.PI*2);
+            ctx.fillStyle = "#e07c2c";
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(fighter.x-4, fighter.y-4, 3, 0, Math.PI*2);
+            ctx.fillStyle = "white";
+            ctx.fill();
+            ctx.fillStyle = "#111";
+            ctx.beginPath();
+            ctx.arc(fighter.x-4, fighter.y-3, 1.5, 0, Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = "#daa520";
+            ctx.beginPath();
+            ctx.moveTo(fighter.x+5, fighter.y+2);
+            ctx.lineTo(fighter.x+13, fighter.y+6);
+            ctx.lineTo(fighter.x+5, fighter.y+9);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+        
+        function drawEnemies() {
+            for (let e of enemies) {
+                ctx.shadowBlur = 5;
+                ctx.shadowColor = "#a04040";
+                ctx.beginPath();
+                ctx.arc(e.x, e.y, e.size, 0, Math.PI*2);
+                ctx.fillStyle = e.color;
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(e.x-3, e.y-3, 3, 0, Math.PI*2);
+                ctx.fillStyle = "#111";
+                ctx.fill();
+                ctx.fillStyle = "white";
+                ctx.beginPath();
+                ctx.arc(e.x-4, e.y-4, 1.2, 0, Math.PI*2);
+                ctx.fill();
+                ctx.font = "bold 11px monospace";
+                ctx.fillStyle = "#ffe3a3";
+                ctx.fillText(`${e.scoreVal}`, e.x-10, e.y-12);
+                ctx.shadowBlur = 0;
+            }
+        }
+        
+        function drawBullets() {
+            for (let b of bullets) {
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, BULLET_RADIUS, 0, Math.PI*2);
+                ctx.fillStyle = b.owner === 'player' ? "#ffd966" : "#ff6b5e";
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, 1.2, 0, Math.PI*2);
+                ctx.fillStyle = "white";
+                ctx.fill();
+            }
+        }
+        
+        function drawBonus() {
+            if (bonus.active) {
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = "#ffbb55";
+                ctx.beginPath();
+                ctx.arc(bonus.x, bonus.y, 14, 0, Math.PI*2);
+                ctx.fillStyle = "#ffbb44";
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(bonus.x, bonus.y, 9, 0, Math.PI*2);
+                ctx.fillStyle = "#ff9f2e";
+                ctx.fill();
+                ctx.font = "bold 18px monospace";
+                ctx.fillStyle = "#482d00";
+                ctx.fillText("⭐", bonus.x-9, bonus.y+7);
+                ctx.shadowBlur = 0;
+            }
+        }
+        
+        function drawMessages() {
+            if (!gameActive) {
+                ctx.font = "bold 34px monospace";
+                ctx.shadowColor = "black";
+                if (victoryFlag) {
+                    ctx.fillStyle = "#b3ff8f";
+                    ctx.fillText("★ YOU WIN! ★", 200, 360);
+                    ctx.font = "18px monospace";
+                    ctx.fillStyle = "#ccc";
+                    ctx.fillText("All 10 levels cleared!", 225, 410);
+                } else {
+                    ctx.fillStyle = "#ff7a5c";
+                    ctx.fillText("☠ GAME OVER ☠", 200, 370);
+                }
+                ctx.font = "15px monospace";
+                ctx.fillStyle = "#aaa";
+                ctx.fillText("press RESTART", 275, 450);
+            }
+        }
+        
+        function render() {
+            // Fill entire canvas background before the translate offset
+            ctx.fillStyle = "#1a212e";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(ROAD_WIDTH, ROAD_WIDTH);
+            drawRoadsAndSquares();
+            drawBonus();
+            drawEnemies();
+            drawBullets();
+            drawFighter();
+            drawMessages();
+            ctx.restore();
+        }
+        
+        // ----- LEVEL START (keeps fighter state, resets enemies) -----
+        function startLevel() {
+            gameActive = true;
+            victoryFlag = false;
+            enemies = [];
+            bullets = [];
+            bonus.active = false;
+            bonusCooldown = 0;
+            enemiesSpawned = 0;
+            shootCooldown = 0;
+            enemySpawnTimer = 0.3;
+            moveInput = { up: false, down: false, left: false, right: false };
+            shootRequest = { up: false, down: false, left: false, right: false };
+            updateUI();
+            for (let i = 0; i < 3; i++) spawnEnemy();
+        }
+
+        // ----- RESET FUNCTION -----
+        function resetGame() {
+            gameActive = true;
+            victoryFlag = false;
+            currentLevel = 1;
+            lives = 3;
+            score = 0;
+            fighter.x = 350;
+            fighter.y = 700;
+            fighter.invincibleTimer = 0;
+            enemies = [];
+            bullets = [];
+            bonus.active = false;
+            bonusCooldown = 0;
+            enemiesSpawned = 0;
+            shootCooldown = 0;
+            enemySpawnTimer = 0.3;
+            moveInput = { up: false, down: false, left: false, right: false };
+            shootRequest = { up: false, down: false, left: false, right: false };
+            updateUI();
+            for (let i = 0; i < 3; i++) spawnEnemy();
+        }
+        
+        // ----- KEYBOARD HANDLING -----
+        function handleShooting() {
+            if (!gameActive) return;
+            if (shootRequest.up || shootRequest.down || shootRequest.left || shootRequest.right) {
+                fighterShoot();
+            }
+        }
+        
+        window.addEventListener('keydown', (e) => {
+            const key = e.key;
+            if (key === 'i') { moveInput.up = true; e.preventDefault(); }
+            if (key === 'k') { moveInput.down = true; e.preventDefault(); }
+            if (key === 'j') { moveInput.left = true; e.preventDefault(); }
+            if (key === 'l') { moveInput.right = true; e.preventDefault(); }
+            if (key === 'w') { shootRequest.up = true; e.preventDefault(); }
+            if (key === 's') { shootRequest.down = true; e.preventDefault(); }
+            if (key === 'a') { shootRequest.left = true; e.preventDefault(); }
+            if (key === 'd') { shootRequest.right = true; e.preventDefault(); }
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            const key = e.key;
+            if (key === 'i') moveInput.up = false;
+            if (key === 'k') moveInput.down = false;
+            if (key === 'j') moveInput.left = false;
+            if (key === 'l') moveInput.right = false;
+            // shoot request cleared after shot in game loop
+        });
+        
+        // ----- GAME LOOP (delta time) -----
+        let lastFrameTime = 0;
+        function gameLoop(nowMs) {
+            requestAnimationFrame(gameLoop);
+            if (!lastFrameTime) { lastFrameTime = nowMs; return; }
+            let delta = Math.min(0.033, (nowMs - lastFrameTime) / 1000);
+            if (delta <= 0.001) { lastFrameTime = nowMs; return; }
+            lastFrameTime = nowMs;
+            
+            if (gameActive) {
+                updateFighter(delta);
+                updateGame(delta);
+                handleShooting();
+            }
+            render();
+        }
+        
+        document.getElementById('resetBtn').addEventListener('click', () => { resetGame(); });
+        resetGame();
+        requestAnimationFrame(gameLoop);
+    })();
+</script>
+</body>
+</html>
