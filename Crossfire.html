@@ -110,6 +110,7 @@
         <div class="info-panel">
             <div class="stats">
                 <div class="stat"><span>❤️</span> <span id="livesDisplay">3</span></div>
+                <div class="stat"><span>🛡️</span> <span id="shieldDisplay">0</span></div>
                 <div class="stat"><span>⭐</span> <span id="scoreDisplay">0</span></div>
                 <div class="stat"><span>👾</span> <span id="enemiesLeft">0</span></div>
                 <div class="stat"><span>📶</span> <span id="levelDisplay">1</span></div>
@@ -225,6 +226,7 @@
         // ----- BONUS -----
         let bonus = { active: false, x: 0, y: 0, timer: 0, radius: 14 };
         let bonusCooldown = 0;
+        let shieldHits = 0;    // bonus-granted bullet absorptions
         
         // ----- INPUT (movement + shooting) -----
         let moveInput = { up: false, down: false, left: false, right: false };
@@ -361,8 +363,6 @@
                 playShoot();
                 shootCooldown = 0.24;
             }
-            // reset request after shot handling
-            shootRequest = { up: false, down: false, left: false, right: false };
         }
         
         // ----- ENEMY AI: RANDOM WALK on roads (with occasional direction changes) -----
@@ -585,6 +585,7 @@
             let dy = fighter.y - bonus.y;
             if (Math.hypot(dx, dy) < fighter.radius + bonus.radius) {
                 score += 500;
+                shieldHits = 2;
                 playBonus();
                 bonus.active = false;
                 bonusCooldown = 3.5;
@@ -635,14 +636,20 @@
                     let dx = b.x - fighter.x, dy = b.y - fighter.y;
                     if (Math.hypot(dx, dy) < BULLET_RADIUS + fighter.radius) {
                         if (fighter.invincibleTimer <= 0 && gameActive) {
-                            lives--;
-                            updateUI();
-                            if (lives <= 0) {
-                                gameActive = false;
-                                victoryFlag = false;
+                            if (shieldHits > 0) {
+                                shieldHits--;
+                                fighter.invincibleTimer = 0.45;
+                                playHit();
+                            } else {
+                                lives--;
+                                if (lives <= 0) {
+                                    gameActive = false;
+                                    victoryFlag = false;
+                                }
+                                fighter.invincibleTimer = 0.85;
+                                playHit();
                             }
-                            fighter.invincibleTimer = 0.85;
-                            playHit();
+                            updateUI();
                         }
                         bullets.splice(i,1);
                         i--;
@@ -730,6 +737,7 @@
         
         function updateUI() {
             document.getElementById('livesDisplay').innerText = lives;
+            document.getElementById('shieldDisplay').innerText = shieldHits;
             document.getElementById('scoreDisplay').innerText = score;
             document.getElementById('enemiesLeft').innerText = enemies.length;
             document.getElementById('levelDisplay').innerText = currentLevel;
@@ -777,6 +785,17 @@
         
         function drawFighter() {
             let inv = fighter.invincibleTimer > 0 && (Date.now() / 70 % 2 < 1);
+            // shield glow ring
+            if (shieldHits > 0) {
+                let pulse = 1 + 0.12 * Math.sin(Date.now() / 180);
+                ctx.shadowBlur = 18 * pulse;
+                ctx.shadowColor = "#44ccff";
+                ctx.beginPath();
+                ctx.arc(fighter.x, fighter.y, fighter.radius + 6, 0, Math.PI * 2);
+                ctx.strokeStyle = "rgba(68,204,255," + (0.5 + 0.2 * Math.sin(Date.now() / 200)) + ")";
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
             ctx.shadowBlur = 10;
             ctx.shadowColor = "#ffaa44";
             ctx.beginPath();
@@ -903,6 +922,7 @@
             bullets = [];
             bonus.active = false;
             bonusCooldown = 0;
+            shieldHits = 0;
             enemiesSpawned = 0;
             shootCooldown = 0;
             enemySpawnTimer = 0.3;
@@ -926,6 +946,7 @@
             bullets = [];
             bonus.active = false;
             bonusCooldown = 0;
+            shieldHits = 0;
             enemiesSpawned = 0;
             shootCooldown = 0;
             enemySpawnTimer = 0.3;
@@ -961,7 +982,10 @@
             if (key === 'ArrowDown') moveInput.down = false;
             if (key === 'ArrowLeft') moveInput.left = false;
             if (key === 'ArrowRight') moveInput.right = false;
-            // shoot request cleared after shot in game loop
+            if (key === 'w') shootRequest.up = false;
+            if (key === 's') shootRequest.down = false;
+            if (key === 'a') shootRequest.left = false;
+            if (key === 'd') shootRequest.right = false;
         });
         
         // ----- GAME LOOP (delta time) -----
