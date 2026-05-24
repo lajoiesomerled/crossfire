@@ -334,10 +334,18 @@
             }
         }
         
+        // ----- CHECK IF POSITION IS AT INTERSECTION -----
+        function isAtIntersection(pos) {
+            let nearX = Math.round(pos.x / NODE_SIZE) * NODE_SIZE;
+            let nearY = Math.round(pos.y / NODE_SIZE) * NODE_SIZE;
+            return Math.abs(pos.x - nearX) < 7 && Math.abs(pos.y - nearY) < 7;
+        }
+
         // ----- FIGHTER SHOOT (dot bullet, cardinal) -----
         function fighterShoot() {
             if (!gameActive) return;
             if (shootCooldown > 0) return;
+            if (!isAtIntersection(fighter)) return;
             let dir = null;
             if (shootRequest.up) dir = { x: 0, y: -1 };
             else if (shootRequest.down) dir = { x: 0, y: 1 };
@@ -401,7 +409,7 @@
             }
 
             let remainingFrac = enemies.length / enemiesThisLevel();
-            let speedMul = 1 + (1 - remainingFrac) * 0.5;  // 1x → 1.5x as enemies die
+            let speedMul = 1 + (1 - remainingFrac) * 1.5;  // 1x → 2.5x as enemies die
             let step = enemy.speed * speedMul * deltaSec;
 
             // Decide new direction when timer fires (store as pending, don't snap)
@@ -502,6 +510,7 @@
         // ----- ENEMY SHOOTING (cardinal dot bullets aimed at fighter) -----
         function enemyShoot(enemy) {
             if (!gameActive) return;
+            if (!isAtIntersection(enemy)) return;
             let dx = fighter.x - enemy.x;
             let dy = fighter.y - enemy.y;
             if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return; // no point blank
@@ -519,15 +528,30 @@
             });
         }
         
-        // ----- SPAWN ENEMY (top road, with random initial direction)-----
+        // ----- SPAWN ENEMY (random edge or interior node) -----
         function spawnEnemy() {
             if (enemiesSpawned >= enemiesThisLevel()) return;
             let typeIdx = Math.floor(Math.random() * ENEMY_TYPES.length);
             let type = ENEMY_TYPES[typeIdx];
-            let xPos = (Math.floor(Math.random() * 11)) * NODE_SIZE;
-            let initialDir = biasedTowardFighter({x: xPos, y: 0});
+            let xPos, yPos;
+            // 40% chance: spawn from any random intersection on the grid
+            if (Math.random() < 0.4) {
+                xPos = (Math.floor(Math.random() * 11)) * NODE_SIZE;
+                yPos = (Math.floor(Math.random() * 11)) * NODE_SIZE;
+            } else {
+                // 60% chance: spawn from a random edge
+                let edge = Math.floor(Math.random() * 4);
+                let nodeIdx = Math.floor(Math.random() * 11);
+                switch (edge) {
+                    case 0: xPos = nodeIdx * NODE_SIZE; yPos = 0; break;           // top
+                    case 1: xPos = nodeIdx * NODE_SIZE; yPos = WORLD_MAX; break;   // bottom
+                    case 2: xPos = 0;                yPos = nodeIdx * NODE_SIZE; break; // left
+                    case 3: xPos = WORLD_MAX;        yPos = nodeIdx * NODE_SIZE; break; // right
+                }
+            }
+            let initialDir = biasedTowardFighter({x: xPos, y: yPos});
             enemies.push({
-                x: xPos, y: 0,
+                x: xPos, y: yPos,
                 radius: type.size,
                 scoreVal: type.score,
                 color: type.color,
@@ -921,10 +945,10 @@
         
         window.addEventListener('keydown', (e) => {
             const key = e.key;
-            if (key === 'i') { moveInput.up = true; e.preventDefault(); }
-            if (key === 'k') { moveInput.down = true; e.preventDefault(); }
-            if (key === 'j') { moveInput.left = true; e.preventDefault(); }
-            if (key === 'l') { moveInput.right = true; e.preventDefault(); }
+            if (key === 'ArrowUp') { moveInput.up = true; e.preventDefault(); }
+            if (key === 'ArrowDown') { moveInput.down = true; e.preventDefault(); }
+            if (key === 'ArrowLeft') { moveInput.left = true; e.preventDefault(); }
+            if (key === 'ArrowRight') { moveInput.right = true; e.preventDefault(); }
             if (key === 'w') { shootRequest.up = true; e.preventDefault(); }
             if (key === 's') { shootRequest.down = true; e.preventDefault(); }
             if (key === 'a') { shootRequest.left = true; e.preventDefault(); }
@@ -933,10 +957,10 @@
         
         window.addEventListener('keyup', (e) => {
             const key = e.key;
-            if (key === 'i') moveInput.up = false;
-            if (key === 'k') moveInput.down = false;
-            if (key === 'j') moveInput.left = false;
-            if (key === 'l') moveInput.right = false;
+            if (key === 'ArrowUp') moveInput.up = false;
+            if (key === 'ArrowDown') moveInput.down = false;
+            if (key === 'ArrowLeft') moveInput.left = false;
+            if (key === 'ArrowRight') moveInput.right = false;
             // shoot request cleared after shot in game loop
         });
         
