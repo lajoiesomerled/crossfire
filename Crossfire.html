@@ -196,7 +196,7 @@
         let fighter = {
             x: 350, y: 700,        // bottom-center (5,10)
             radius: 15,
-            speed: 245,            // pixels/sec (faster than enemies)
+            speed: 282,            // pixels/sec (faster than enemies)
             invincibleTimer: 0,
         };
         let lives = 3;
@@ -206,16 +206,17 @@
         // ----- LEVELS & ENEMIES -----
         let currentLevel = 1;
         const MAX_LEVEL = 10;
-        function enemiesThisLevel() { return 40 + currentLevel * 10; }  // 50 → 140
+        function enemiesThisLevel() { return 10 + currentLevel * 5; }  // 15 → 60
 
         let enemies = [];
         let enemiesSpawned = 0;
         let enemySpawnTimer = 0;
         
-        const ENEMY_TYPES = [
-            { name: "grunt", score: 100, color: "#e3a56d", size: 14, speed: 22, shootDelay: 1.3 },
-            { name: "ranger", score: 200, color: "#cf5c7c", size: 15, speed: 19, shootDelay: 1.1 },
-            { name: "commander", score: 350, color: "#aa6ac9", size: 17, speed: 26, shootDelay: 1.4 }
+        const ENEMY_STAGES = [
+            { stage: 1, score: 100, color: "#e3a56d" },
+            { stage: 2, score: 150, color: "#f0c040" },
+            { stage: 3, score: 200, color: "#ff8844" },
+            { stage: 4, score: 250, color: "#ff4444" },
         ];
         
         // ----- BULLETS (just a dot) -----
@@ -482,26 +483,29 @@
                     let dx = a.x - b.x;
                     let dy = a.y - b.y;
                     let dist = Math.hypot(dx, dy);
-                    let minDist = a.size + b.size;
+                    let minDist = a.size + b.size + 6;
                     if (dist < minDist && dist > 0.01) {
                         let overlap = minDist - dist;
                         let angle = Math.atan2(dy, dx);
-                        let pushX = Math.cos(angle) * overlap * 0.55;
-                        let pushY = Math.sin(angle) * overlap * 0.55;
-                        a.x += pushX;
-                        a.y += pushY;
-                        b.x -= pushX;
-                        b.y -= pushY;
-                        // re-apply road constraint for both
-                        let ca = applyRoadConstraint(a, 0, 0);
-                        let cb = applyRoadConstraint(b, 0, 0);
+                        let pushX = Math.cos(angle) * overlap * 0.7;
+                        let pushY = Math.sin(angle) * overlap * 0.7;
+                        // push a toward nearest road, b toward nearest road
+                        let ca = applyRoadConstraint({x: a.x + pushX, y: a.y + pushY}, 0, 0);
+                        let cb = applyRoadConstraint({x: b.x - pushX, y: b.y - pushY}, 0, 0);
+                        // if both snapped to same spot, nudge one along road
+                        if (Math.abs(ca.x - cb.x) < 2 && Math.abs(ca.y - cb.y) < 2) {
+                            if (a.moveDir) {
+                                ca.x += a.moveDir[0] * NODE_SIZE * 0.5;
+                                ca.y += a.moveDir[1] * NODE_SIZE * 0.5;
+                            }
+                        }
                         a.x = ca.x; a.y = ca.y;
                         b.x = cb.x; b.y = cb.y;
-                        // slight direction nudge to prevent sticking
-                        if (Math.random() < 0.2) {
-                            a.dirChangeTimer = 0.2;
-                            b.dirChangeTimer = 0.2;
-                        }
+                        // force immediate re-evaluation of direction
+                        a.dirChangeTimer = 0.05;
+                        b.dirChangeTimer = 0.05;
+                        a.pendingDir = null;
+                        b.pendingDir = null;
                     }
                 }
             }
@@ -528,37 +532,40 @@
             });
         }
         
-        // ----- SPAWN ENEMY (random edge or interior node) -----
+        // ----- SPAWN ENEMY (distance-weighted: farther = more likely) -----
         function spawnEnemy() {
             if (enemiesSpawned >= enemiesThisLevel()) return;
-            let typeIdx = Math.floor(Math.random() * ENEMY_TYPES.length);
-            let type = ENEMY_TYPES[typeIdx];
-            let xPos, yPos;
-            // 40% chance: spawn from any random intersection on the grid
-            if (Math.random() < 0.4) {
-                xPos = (Math.floor(Math.random() * 11)) * NODE_SIZE;
-                yPos = (Math.floor(Math.random() * 11)) * NODE_SIZE;
-            } else {
-                // 60% chance: spawn from a random edge
-                let edge = Math.floor(Math.random() * 4);
-                let nodeIdx = Math.floor(Math.random() * 11);
-                switch (edge) {
-                    case 0: xPos = nodeIdx * NODE_SIZE; yPos = 0; break;           // top
-                    case 1: xPos = nodeIdx * NODE_SIZE; yPos = WORLD_MAX; break;   // bottom
-                    case 2: xPos = 0;                yPos = nodeIdx * NODE_SIZE; break; // left
-                    case 3: xPos = WORLD_MAX;        yPos = nodeIdx * NODE_SIZE; break; // right
+            let stageInfo = ENEMY_STAGES[0]; // always start at stage 1
+            // weight every node by squared distance to fighter (farther = higher chance)
+            let candidates = [];
+            let totalWeight = 0;
+            for (let ix = 0; ix <= 10; ix++) {
+                for (let iy = 0; iy <= 10; iy++) {
+                    let nx = ix * NODE_SIZE;
+                    let ny = iy * NODE_SIZE;
+                    let dist = Math.hypot(nx - fighter.x, ny - fighter.y);
+                    let weight = dist * dist + 1; // squared bias, +1 avoids zero
+                    candidates.push({ x: nx, y: ny, weight: weight });
+                    totalWeight += weight;
                 }
+            }
+            let roll = Math.random() * totalWeight;
+            let xPos = candidates[0].x, yPos = candidates[0].y;
+            for (let c of candidates) {
+                roll -= c.weight;
+                if (roll <= 0) { xPos = c.x; yPos = c.y; break; }
             }
             let initialDir = biasedTowardFighter({x: xPos, y: yPos});
             enemies.push({
                 x: xPos, y: yPos,
-                radius: type.size,
-                scoreVal: type.score,
-                color: type.color,
-                speed: type.speed,
+                stage: 1,
+                radius: 14,
+                scoreVal: stageInfo.score,
+                color: stageInfo.color,
+                speed: 22,
                 shootTimer: 0,
-                shootDelay: type.shootDelay,
-                size: type.size,
+                shootDelay: 1.2,
+                size: 14,
                 moveDir: initialDir,
                 pendingDir: null,
                 dirChangeTimer: 0.6 + Math.random() * 0.9
@@ -615,7 +622,7 @@
                 }
             }
             
-            // bullets: player bullets kill enemies; enemy bullets hurt fighter (no friendly fire)
+            // bullets: player bullets advance enemy stage; enemy bullets hurt fighter (no friendly fire)
             for (let i=0; i<bullets.length; i++) {
                 let b = bullets[i];
                 if (b.owner === 'player') {
@@ -623,15 +630,28 @@
                         let e = enemies[ei];
                         let dx = b.x - e.x, dy = b.y - e.y;
                         if (Math.hypot(dx, dy) < BULLET_RADIUS + e.radius) {
-                            score += e.scoreVal;
-                            enemies.splice(ei,1);
-                            bullets.splice(i,1);
+                            if (e.stage < 4) {
+                                // advance to next stage
+                                let oldDelay = e.shootDelay;
+                                e.stage++;
+                                let stageInfo = ENEMY_STAGES[e.stage - 1];
+                                e.scoreVal = stageInfo.score;
+                                e.color = stageInfo.color;
+                                e.shootDelay *= 0.9;
+                                e.shootTimer *= e.shootDelay / oldDelay;
+                            } else {
+                                // stage 4: enemy dies
+                                score += e.scoreVal;
+                                enemies.splice(ei, 1);
+                            }
+                            playHit();
+                            bullets.splice(i, 1);
                             updateUI();
                             i--;
                             break;
                         }
                     }
-                } 
+                }
                 else if (b.owner === 'enemy') {
                     let dx = b.x - fighter.x, dy = b.y - fighter.y;
                     if (Math.hypot(dx, dy) < BULLET_RADIUS + fighter.radius) {
@@ -823,25 +843,78 @@
             ctx.shadowBlur = 0;
         }
         
+        // ----- STAGE ICON HELPERS -----
+        function drawHexagon(cx, cy, r) {
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                let a = Math.PI / 6 + (i * Math.PI) / 3;
+                let x = cx + r * Math.cos(a);
+                let y = cy + r * Math.sin(a);
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+        }
+        function drawDiamond(cx, cy, r) {
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - r);
+            ctx.lineTo(cx + r, cy);
+            ctx.lineTo(cx, cy + r);
+            ctx.lineTo(cx - r, cy);
+            ctx.closePath();
+        }
+        function drawTriangle(cx, cy, r) {
+            ctx.beginPath();
+            for (let i = 0; i < 3; i++) {
+                let a = -Math.PI / 2 + (i * Math.PI * 2) / 3;
+                let x = cx + r * Math.cos(a);
+                let y = cy + r * Math.sin(a);
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+        }
+        function drawStar(cx, cy, r) {
+            let innerR = r * 0.45;
+            ctx.beginPath();
+            for (let i = 0; i < 10; i++) {
+                let rr = i % 2 === 0 ? r : innerR;
+                let a = -Math.PI / 2 + (i * Math.PI) / 5;
+                let x = cx + rr * Math.cos(a);
+                let y = cy + rr * Math.sin(a);
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+        }
+
         function drawEnemies() {
             for (let e of enemies) {
-                ctx.shadowBlur = 5;
-                ctx.shadowColor = "#a04040";
-                ctx.beginPath();
-                ctx.arc(e.x, e.y, e.size, 0, Math.PI*2);
+                // glow intensifies with stage
+                ctx.shadowBlur = 6 + e.stage * 3;
+                ctx.shadowColor = e.color;
+                // draw stage-specific icon
+                switch (e.stage) {
+                    case 1: drawHexagon(e.x, e.y, e.size); break;
+                    case 2: drawDiamond(e.x, e.y, e.size); break;
+                    case 3: drawTriangle(e.x, e.y, e.size); break;
+                    case 4: drawStar(e.x, e.y, e.size); break;
+                }
                 ctx.fillStyle = e.color;
                 ctx.fill();
+                ctx.strokeStyle = "rgba(255,255,255,0.5)";
+                ctx.lineWidth = 1.2;
+                ctx.stroke();
+                // central eye
                 ctx.beginPath();
-                ctx.arc(e.x-3, e.y-3, 3, 0, Math.PI*2);
+                ctx.arc(e.x - 2, e.y - 3, 2.8, 0, Math.PI * 2);
                 ctx.fillStyle = "#111";
                 ctx.fill();
                 ctx.fillStyle = "white";
                 ctx.beginPath();
-                ctx.arc(e.x-4, e.y-4, 1.2, 0, Math.PI*2);
+                ctx.arc(e.x - 3, e.y - 4, 1.1, 0, Math.PI * 2);
                 ctx.fill();
-                ctx.font = "bold 11px monospace";
+                // stage + score label
+                ctx.font = "bold 10px monospace";
                 ctx.fillStyle = "#ffe3a3";
-                ctx.fillText(`${e.scoreVal}`, e.x-10, e.y-12);
+                ctx.fillText(`S${e.stage}·${e.scoreVal}`, e.x - 12, e.y - e.size - 6);
                 ctx.shadowBlur = 0;
             }
         }
