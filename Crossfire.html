@@ -380,18 +380,32 @@
         // All four cardinal directions (dx, dy)
         const CARDINAL_DIRS = [[0, -1], [0, 1], [-1, 0], [1, 0]];
 
-        // Pick a cardinal direction biased roughly toward the fighter
+        // Pick a cardinal direction biased toward the fighter, avoiding other enemies
         function biasedTowardFighter(enemy) {
             let toX = fighter.x - enemy.x;
             let toY = fighter.y - enemy.y;
-            // Fewer enemies → less jitter → more accurate chasing
             let remainingFrac = enemies.length / enemiesThisLevel();
-            let jitterRange = 140 * (0.2 + 0.8 * remainingFrac); // 140→28 as enemies die
+            let jitterRange = 140 * (0.2 + 0.8 * remainingFrac);
 
             let scores = CARDINAL_DIRS.map(d => {
                 let dot = d[0] * toX + d[1] * toY;
                 let jitter = (Math.random() - 0.5) * jitterRange;
-                return dot + jitter;
+                // penalty for directions that point toward other enemies
+                let penalty = 0;
+                for (let other of enemies) {
+                    if (other === enemy) continue;
+                    let dx = other.x - enemy.x;
+                    let dy = other.y - enemy.y;
+                    if (Math.abs(dx) > NODE_SIZE * 3 || Math.abs(dy) > NODE_SIZE * 3) continue;
+                    let proj = d[0] * dx + d[1] * dy;
+                    if (proj > 0 && proj < NODE_SIZE * 2.5) {
+                        let perp = Math.abs(-d[1] * dx + d[0] * dy);
+                        if (perp < NODE_SIZE * 0.8) {
+                            penalty += 400 * (1 - proj / (NODE_SIZE * 2.5));
+                        }
+                    }
+                }
+                return dot + jitter - penalty;
             });
 
             let bestIdx = 0;
@@ -441,12 +455,29 @@
                 let atInter = onHoriz && onVert;
 
                 if (atInter) {
-                    // At intersection: commit the pending turn and move in new direction
-                    enemy.moveDir = enemy.pendingDir;
-                    enemy.pendingDir = null;
-                    let newPos = applyRoadConstraint(enemy, enemy.moveDir[0] * step, enemy.moveDir[1] * step);
-                    enemy.x = newPos.x;
-                    enemy.y = newPos.y;
+                    // Check if next node in pending direction is occupied
+                    let nextX = enemy.x + enemy.pendingDir[0] * NODE_SIZE;
+                    let nextY = enemy.y + enemy.pendingDir[1] * NODE_SIZE;
+                    let blocked = false;
+                    for (let other of enemies) {
+                        if (other === enemy) continue;
+                        if (Math.abs(other.x - nextX) < NODE_SIZE * 0.45 &&
+                            Math.abs(other.y - nextY) < NODE_SIZE * 0.45) {
+                            blocked = true;
+                            break;
+                        }
+                    }
+                    if (blocked) {
+                        // delay turn, re-evaluate direction soon
+                        enemy.dirChangeTimer = 0.15;
+                    } else {
+                        // At intersection: commit the pending turn and move in new direction
+                        enemy.moveDir = enemy.pendingDir;
+                        enemy.pendingDir = null;
+                        let newPos = applyRoadConstraint(enemy, enemy.moveDir[0] * step, enemy.moveDir[1] * step);
+                        enemy.x = newPos.x;
+                        enemy.y = newPos.y;
+                    }
                 } else {
                     // Slide toward nearest intersection along current road
                     let targetX = enemy.x, targetY = enemy.y;
@@ -468,6 +499,21 @@
                 }
             } else {
                 // Normal movement along current direction
+                // Check if next intersection ahead is occupied — if so, re-route
+                let aheadX = enemy.x + enemy.moveDir[0] * NODE_SIZE;
+                let aheadY = enemy.y + enemy.moveDir[1] * NODE_SIZE;
+                let aheadBlocked = false;
+                for (let other of enemies) {
+                    if (other === enemy) continue;
+                    if (Math.abs(other.x - aheadX) < NODE_SIZE * 0.4 &&
+                        Math.abs(other.y - aheadY) < NODE_SIZE * 0.4) {
+                        aheadBlocked = true;
+                        break;
+                    }
+                }
+                if (aheadBlocked) {
+                    enemy.dirChangeTimer = 0.01;
+                }
                 let newPos = applyRoadConstraint(enemy, enemy.moveDir[0] * step, enemy.moveDir[1] * step);
                 enemy.x = newPos.x;
                 enemy.y = newPos.y;
@@ -483,27 +529,35 @@
                     let dx = a.x - b.x;
                     let dy = a.y - b.y;
                     let dist = Math.hypot(dx, dy);
-                    let minDist = a.size + b.size + 6;
+                    let minDist = a.size + b.size + 10;
                     if (dist < minDist && dist > 0.01) {
                         let overlap = minDist - dist;
                         let angle = Math.atan2(dy, dx);
-                        let pushX = Math.cos(angle) * overlap * 0.7;
-                        let pushY = Math.sin(angle) * overlap * 0.7;
-                        // push a toward nearest road, b toward nearest road
-                        let ca = applyRoadConstraint({x: a.x + pushX, y: a.y + pushY}, 0, 0);
-                        let cb = applyRoadConstraint({x: b.x - pushX, y: b.y - pushY}, 0, 0);
-                        // if both snapped to same spot, nudge one along road
-                        if (Math.abs(ca.x - cb.x) < 2 && Math.abs(ca.y - cb.y) < 2) {
-                            if (a.moveDir) {
-                                ca.x += a.moveDir[0] * NODE_SIZE * 0.5;
-                                ca.y += a.moveDir[1] * NODE_SIZE * 0.5;
+                        let jitter = (Math.random() - 0.5) * 0.9;
+                        let pushX = Math.cos(angle + jitter) * overlap * 0.55;
+                        let pushY = Math.sin(angle + jitter) * overlap * 0.55;
+                        a.x += pushX;
+                        a.y += pushY;
+                        b.x -= pushX;
+                        b.y -= pushY;
+                        // if on same road, force both to perpendicular roads
+                        if (a.moveDir && b.moveDir) {
+                            let sameLine = (a.moveDir[0] === b.moveDir[0] && a.moveDir[1] === b.moveDir[1]) ||
+                                           (a.moveDir[0] === -b.moveDir[0] && a.moveDir[1] === -b.moveDir[1]);
+                            if (sameLine) {
+                                a.moveDir = [a.moveDir[1], a.moveDir[0]];
+                                b.moveDir = [-b.moveDir[1], -b.moveDir[0]];
+                                a.pendingDir = null;
+                                b.pendingDir = null;
+                                // commit to new direction for a while before re-evaluating
+                                a.dirChangeTimer = 0.6 + Math.random() * 0.5;
+                                b.dirChangeTimer = 0.6 + Math.random() * 0.5;
+                                continue; // skip the default timer reset below
                             }
                         }
-                        a.x = ca.x; a.y = ca.y;
-                        b.x = cb.x; b.y = cb.y;
-                        // force immediate re-evaluation of direction
-                        a.dirChangeTimer = 0.05;
-                        b.dirChangeTimer = 0.05;
+                        // force immediate direction re-eval
+                        a.dirChangeTimer = 0.01;
+                        b.dirChangeTimer = 0.01;
                         a.pendingDir = null;
                         b.pendingDir = null;
                     }
@@ -562,9 +616,9 @@
                 radius: 14,
                 scoreVal: stageInfo.score,
                 color: stageInfo.color,
-                speed: 22,
+                speed: 22 * (0.85 + Math.random() * 0.3),
                 shootTimer: 0,
-                shootDelay: 1.2,
+                shootDelay: 0.75,
                 size: 14,
                 moveDir: initialDir,
                 pendingDir: null,
