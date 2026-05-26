@@ -350,10 +350,11 @@
             if (shootCooldown > 0) return;
             if (!isAtIntersection(fighter)) return;
             let dir = null;
-            if (shootRequest.up) dir = { x: 0, y: -1 };
-            else if (shootRequest.down) dir = { x: 0, y: 1 };
-            else if (shootRequest.left) dir = { x: -1, y: 0 };
-            else if (shootRequest.right) dir = { x: 1, y: 0 };
+            let dirKey = null;
+            if (shootRequest.up) { dir = { x: 0, y: -1 }; dirKey = 'up'; }
+            else if (shootRequest.down) { dir = { x: 0, y: 1 }; dirKey = 'down'; }
+            else if (shootRequest.left) { dir = { x: -1, y: 0 }; dirKey = 'left'; }
+            else if (shootRequest.right) { dir = { x: 1, y: 0 }; dirKey = 'right'; }
             if (dir) {
                 bullets.push({
                     x: fighter.x, y: fighter.y,
@@ -363,6 +364,7 @@
                 });
                 playShoot();
                 shootCooldown = 0.24;
+                shootRequest[dirKey] = false; // consume key press — release + re-press to fire again
             }
         }
         
@@ -646,7 +648,7 @@
             let dy = fighter.y - bonus.y;
             if (Math.hypot(dx, dy) < fighter.radius + bonus.radius) {
                 score += 500;
-                shieldHits = 2;
+                shieldHits += 2;
                 playBonus();
                 bonus.active = false;
                 bonusCooldown = 3.5;
@@ -1085,10 +1087,7 @@
         
         // ----- KEYBOARD HANDLING -----
         function handleShooting() {
-            if (!gameActive) return;
-            if (shootRequest.up || shootRequest.down || shootRequest.left || shootRequest.right) {
-                fighterShoot();
-            }
+            fighterShoot();
         }
         
         window.addEventListener('keydown', (e) => {
@@ -1097,6 +1096,7 @@
             if (key === 'ArrowDown') { moveInput.down = true; e.preventDefault(); }
             if (key === 'ArrowLeft') { moveInput.left = true; e.preventDefault(); }
             if (key === 'ArrowRight') { moveInput.right = true; e.preventDefault(); }
+            if (e.repeat) return;
             if (key === 'w') { shootRequest.up = true; e.preventDefault(); }
             if (key === 's') { shootRequest.down = true; e.preventDefault(); }
             if (key === 'a') { shootRequest.left = true; e.preventDefault(); }
